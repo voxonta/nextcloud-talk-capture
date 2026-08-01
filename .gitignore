@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+# Generated stubs live in src/talk_capture/_pb and ARE committed — see the note
+# there. Any other generated protobuf is not.
+*_pb2.py
+*_pb2_grpc.py
+!src/talk_capture/_pb/meeting_pb2.py
+!src/talk_capture/_pb/meeting_pb2_grpc.py
+build/
+.pytest_cache/

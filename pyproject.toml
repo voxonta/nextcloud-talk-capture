@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Distribution name is explicit about the domain (PyPI is a global namespace);
+# the import name stays `talk_capture`.
+name = "nextcloud-talk-capture"
+version = "0.3.0"
+description = "Capture Nextcloud Talk calls: signalling client, per-speaker audio, call monitoring"
+readme = "README.md"
+requires-python = ">=3.11"
+# MIT on purpose, not by default: this is consumed both by an AGPL Nextcloud app
+# and by a proprietary backend. Copyleft here would reach into the latter; MIT
+# is compatible in both directions.
+license = { text = "MIT" }
+authors = [{ name = "Done" }]
+keywords = ["nextcloud", "nextcloud-talk", "webrtc", "transcription", "audio-capture"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Conferencing",
+    "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
+]
+# What it takes to join a call and move its audio: signalling (websockets),
+# media (aiortc), frames (numpy), HTTP to the app (aiohttp), and gRPC to hand
+# the audio over. The generated meeting.v1 stubs ship inside the package — see
+# src/talk_capture/_pb — so installing needs no protoc.
+dependencies = [
+    "aiohttp>=3.9.0",
+    "numpy>=1.24.0",
+    "websockets>=12.0",
+    "aiortc>=1.9.0",
+    "grpcio>=1.60.0",
+    # Not a guess: the shipped stubs call ValidateProtobufRuntimeVersion with the
+    # version that generated them, so an older runtime raises on import. Keep in
+    # step with the generator pinned in scripts/regen_stubs.sh.
+    "protobuf>=7.35.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/devsoftmus/nextcloud-talk-capture"
+Issues = "https://github.com/devsoftmus/nextcloud-talk-capture/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["talk_capture*"]
+
+[tool.ruff]
+# Generated protobuf stubs are not ours to style.
+extend-exclude = ["src/talk_capture/_pb"]

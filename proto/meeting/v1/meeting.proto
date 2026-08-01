@@ -1,0 +1,217 @@
+syntax = "proto3";
+
+// The SaaS boundary: the ONE endpoint a customer's capture service talks to.
+//
+// A customer installs two things — the Nextcloud app (its config plane) and a
+// thin capture service. The capture service knows how to join a call and get
+// per-speaker audio; it knows nothing about recognition, summarisation, or what
+// a meeting's files should look like. Everything after "here is the audio" is
+// ours, and lives behind this contract.
+//
+// Two invariants shape it:
+//
+//  1. **We never write into the customer's Nextcloud.** The gateway returns file
+//     CONTENT and a suggested name; the client decides where it lands and writes
+//     it with its own credentials. Their data stays theirs to place, and we need
+//     no write access to their instance.
+//
+//  2. **Artifacts are pulled, not pushed.** Analysis of a long meeting takes
+//     6–90 minutes (LLM-bound, measured in production), so results cannot come
+//     back on the audio stream. Pushing them would need a publicly reachable
+//     endpoint inside the customer's network, which most instances do not have —
+//     so the client polls instead. No inbound access to the customer is required.
+//
+// The engine (transcriber.v1) stays an internal implementation detail behind
+// this gateway: it is a pure ASR service that knows nothing about rooms,
+// participants or files, and clients never address it directly.
+package meeting.v1;
+
+import "google/protobuf/empty.proto";
+
+service MeetingGateway {
+  // Stream one call's audio. The first frame carries the meeting's context, then
+  // per-speaker audio, then an optional end frame just before half-close.
+  //
+  // Returns once the call is accepted and durably owned by us — NOT once the
+  // meeting is analysed. The transcript is usually ready at this point; analysis
+  // is not. Fetch both with GetArtifacts.
+  rpc ProcessCall(stream CallFrame) returns (CallAccepted);
+
+  // What is ready for this call so far. Safe to call repeatedly: it is the
+  // client's only way to learn that analysis finished, and re-fetching is how a
+  // client that crashed mid-write recovers.
+  rpc GetArtifacts(ArtifactsRequest) returns (ArtifactsResponse);
+
+  // Tell us the client has durably written these artifacts, so we can retire
+  // them. Advisory: retention also expires on its own, and a client that never
+  // acks still works — it just re-fetches until the window closes.
+  rpc AckArtifacts(AckRequest) returns (Ack);
+
+  rpc Health(google.protobuf.Empty) returns (HealthStatus);
+}
+
+message CallFrame {
+  oneof frame {
+    MeetingContext context = 1;  // exactly the first frame
+    AudioChunk audio = 2;        // every subsequent frame
+    CallEnd end = 3;             // optional last frame, just before half-close
+  }
+}
+
+// Everything we need to turn recognised speech into a meeting's files, stated in
+// the source's own terms. Deliberately not Nextcloud-shaped: a room is an opaque
+// token plus a human title, so another source (Telemost, Meet, a phone bridge)
+// fills the same fields without special-casing.
+message MeetingContext {
+  // Client-generated UUID. It is the idempotency key: re-streaming the same
+  // session_id after a crash resumes that call rather than starting a second one.
+  string session_id = 1;
+  // Advisory label for where the call came from ("nc-talk", "telemost"). The
+  // authority on WHO is calling is the access token, never this field.
+  string source = 2;
+  string room_token = 3;  // opaque room id, as the source knows it
+  string room_name = 4;   // human title used in the file's heading and name
+  RoomKind room_kind = 5;
+  // Everyone present, including people who never spoke — the source's ground
+  // truth. Speaker names on audio only cover who was heard.
+  repeated string participants = 6;
+  string language = 7;  // BCP-47-ish, e.g. "ru"
+  // IANA zone (e.g. "Europe/Moscow"). Files carry local wall-clock times, and
+  // the container running the engine is UTC — without this the timestamps in a
+  // meeting's document silently drift by the offset.
+  string timezone = 8;
+  int64 call_start_ms = 9;  // unix ms; the anchor every segment time is relative to
+}
+
+// One slice of one speaker's audio.
+message AudioChunk {
+  // STABLE person key, not a transport session id: it must survive a mid-call
+  // reconnect, or the same person splits into two speakers in the transcript.
+  string speaker_id = 1;
+  string speaker_name = 2;  // display name; last non-empty value wins
+  // Canonical 16 kHz mono float32 LE, normalised [-1, 1]. Fixed at the contract
+  // level so every source produces byte-identical model input.
+  bytes pcm = 3;
+  int64 recv_ts_ms = 4;  // OPTIONAL. Source's receive wall-clock (one clock for all speakers)
+  int64 pts_ms = 5;      // OPTIONAL. Track-relative presentation timestamp
+}
+
+message CallEnd {
+  int64 call_end_ms = 1;
+  // People the source could not capture audio for (ICE failure, muted-then-left).
+  // Named in the document so a missing voice reads as a known gap, not an error.
+  repeated string uncaptured = 2;
+  int32 present_count = 3;
+  // The final attendee roster — everyone who was present, including people who
+  // never spoke. Known only at the end (people join and leave), so it belongs
+  // here rather than in the opening context. The brain prefers this over
+  // MeetingContext.participants for the document's participant list.
+  repeated string participants = 4;
+  // Who each captured audio track belongs to: speaker_id (the transport SID the
+  // audio was tagged with) → display name. Only the source knows this mapping,
+  // and it is resolved at the end (names settle as people join); the brain uses
+  // it to label each segment with a person instead of a raw SID. Without it the
+  // transcript shows "who spoke when" as opaque ids.
+  //
+  // Assumes one track per person, which is true when the source gets a separate
+  // stream each (Nextcloud Talk). When it does not, see `spans`.
+  map<string, string> speakers = 5;
+
+  // Who was speaking WHEN, for sources that cannot give a track per person.
+  //
+  // A bot joining a meeting as a guest (Telemost today; Meet, Zoom, Teams by
+  // the same pattern) receives ONE mixed downmix from the conference server, so
+  // a track is not a person — it is everybody, in turns. Such a source knows the
+  // turns from its own telemetry (Telemost lights the active speaker in the UI,
+  // and the bot reads that), which it can express here without ever seeing the
+  // recognised text.
+  //
+  // The brain assigns each recognised segment to the span covering it. Spans
+  // and `speakers` are alternatives, not layers: a source sends whichever
+  // matches how it captures. Neither is required — without both, segments carry
+  // the engine's own labels.
+  repeated SpeakerSpan spans = 6;
+}
+
+// One stretch of one person speaking, in milliseconds from call start — the
+// same base segment times use, so no cross-clock arithmetic is needed.
+//
+// Deliberately just an assertion about time, with no reference to audio: the
+// source states who held the floor, the brain decides what that means for the
+// text it recognised. Spans may overlap (people talk over each other); the
+// brain resolves that when it labels a segment.
+message SpeakerSpan {
+  int64 start_ms = 1;
+  int64 end_ms = 2;
+  string name = 3;
+  // OPTIONAL. The track the span applies to, when a source sends several. Empty
+  // means "the one mixed track", which is the bot-guest case.
+  string speaker_id = 4;
+}
+
+message CallAccepted {
+  string session_id = 1;
+  CallStatus status = 2;
+}
+
+message ArtifactsRequest {
+  string session_id = 1;
+  // Digests the client already holds. We omit the bytes for those and return
+  // only their metadata, so polling a finished meeting stays cheap.
+  repeated string have_sha256 = 2;
+}
+
+message ArtifactsResponse {
+  string session_id = 1;
+  CallStatus status = 2;
+  repeated Artifact artifacts = 3;
+  // Human-readable note for the terminal states — why analysis was skipped
+  // (plan, too short) or what failed. Surfaced to the customer's admin.
+  string detail = 4;
+}
+
+message Artifact {
+  // Suggested file name only. Where it lands is the client's decision — its
+  // folder names come from the customer's own app settings, not from us.
+  string name = 1;
+  ArtifactKind kind = 2;
+  bytes content = 3;  // empty when the client already listed this sha256
+  string sha256 = 4;
+  string media_type = 5;  // e.g. "text/markdown; charset=utf-8"
+}
+
+message AckRequest {
+  string session_id = 1;
+  repeated string sha256 = 2;
+}
+
+message Ack {}
+
+message HealthStatus {
+  bool ready = 1;
+  string version = 2;
+}
+
+enum RoomKind {
+  ROOM_KIND_UNSPECIFIED = 0;
+  ROOM_KIND_ONE_TO_ONE = 1;  // shared per-person, not into the room
+  ROOM_KIND_GROUP = 2;
+  ROOM_KIND_PUBLIC = 3;
+}
+
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_TRANSCRIPT = 1;  // the meeting's spoken record
+  ARTIFACT_KIND_SUMMARY = 2;     // the one file most people actually read
+  ARTIFACT_KIND_ANALYSIS = 3;    // the rest of the analysis set
+  ARTIFACT_KIND_STATS = 4;       // machine-readable per-call numbers
+}
+
+enum CallStatus {
+  CALL_STATUS_UNSPECIFIED = 0;
+  CALL_STATUS_TRANSCRIBING = 1;  // audio still streaming or recognition in flight
+  CALL_STATUS_TRANSCRIBED = 2;   // transcript artifact ready; analysis may follow
+  CALL_STATUS_ANALYZING = 3;
+  CALL_STATUS_COMPLETE = 4;      // nothing further will appear for this call
+  CALL_STATUS_FAILED = 5;        // see detail; any artifact already produced still stands
+}
