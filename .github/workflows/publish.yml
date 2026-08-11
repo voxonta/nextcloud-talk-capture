@@ -1,0 +1,76 @@
+name: Publish
+
+# Releases go out by tag, not by merge: main is where work accumulates, and a
+# version on PyPI can never be taken back or replaced. Making that a deliberate
+# act rather than a side effect of merging is the whole point.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: pip install -e '.[dev]' pytest build twine
+
+      - name: Test
+        run: python -m pytest tests -q
+
+      # The tag and the version in pyproject.toml must agree. They drift the
+      # moment somebody tags without bumping, and PyPI answers that with a
+      # "file already exists" halfway through the release — after the tag is
+      # already public. Cheaper to fail here.
+      - name: Tag matches the version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in pyproject.toml"
+            exit 1
+          fi
+          echo "tag and version agree on $version"
+
+      - name: Build
+        run: python -m build
+
+      # Catches a README that renders as a wall of plain text on the project
+      # page — invisible locally, permanent once uploaded.
+      - name: Check the metadata
+        run: twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      # Trusted publishing: PyPI verifies this workflow's identity instead of
+      # us keeping a long-lived token in the repository. The trust is bound to
+      # the owner/repo pair, so moving the repository between organisations
+      # breaks it until the publisher is pointed at the new one.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

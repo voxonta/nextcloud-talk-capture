@@ -42,6 +42,13 @@ dependencies = [
     "protobuf>=7.35.1",
 ]
 
+# Tests need nothing the package does not already pull in, apart from the
+# runner itself — the gRPC stubs and numpy are runtime dependencies. Declared
+# so `pip install -e '.[dev]'` means something: it silently installed nothing
+# before, and the README told people to type it.
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [project.urls]
 Homepage = "https://github.com/voxonta/nextcloud-talk-capture"
 Issues = "https://github.com/voxonta/nextcloud-talk-capture/issues"
