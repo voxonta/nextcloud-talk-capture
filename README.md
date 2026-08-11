@@ -1,64 +1,72 @@
 # nextcloud-talk-capture
 
-Захват звонков Nextcloud Talk: сервис подключается к звонку, забирает аудио
-по каждому говорящему и отдаёт его в облачный шлюз обработки.
+Captures Nextcloud Talk calls: the service joins a call, takes one audio stream
+per speaker, and streams it to a processing gateway.
 
-Больше он не делает ничего. Ни распознавания, ни анализа, ни записи файлов —
-готовые файлы возвращает шлюз, а кладёт их в Nextcloud приложение, под своими
-учётными данными, которые не покидают контур клиента.
+That is all it does. No recognition, no analysis, no writing files — the finished
+files come back from the gateway, and the [Nextcloud app](https://github.com/voxonta/voxonta-nextcloud-app)
+puts them away under its own credentials, which never leave the customer's
+premises.
 
-## Три части, одна из которых здесь
+Part of [Voxonta](https://voxonta.com). Documentation:
+[running the connector yourself](https://voxonta.com/docs/self-hosting/).
+
+## Three parts, one of them here
 
 ```
-Nextcloud + приложение          перехватчик (этот репозиторий)      облако
-──────────────────────          ────────────────────────────       ──────
-хранит историю встреч           берёт настройки у приложения
-отдаёт настройки и звонки  ───▶ подключается к звонку
-пишет готовые файлы             стримит аудио по спикерам      ───▶ обработка
+Nextcloud + the app             the connector (this repo)            the cloud
+───────────────────             ─────────────────────────            ─────────
+keeps the meeting archive       reads its settings from the app
+serves settings and calls  ───▶ joins the call
+writes the finished files       streams per-speaker audio       ───▶ processing
         ▲                                                            │
-        └────────────────── готовые файлы ◀──────────────────────────┘
+        └────────────────── finished files ◀─────────────────────────┘
 ```
 
-Для облака Nextcloud — чёрный ящик, и наоборот: перехватчик не знает, что
-происходит с аудио после передачи, а облако не имеет доступа к Nextcloud.
+Nextcloud is a black box to the cloud and the other way round: the connector does
+not know what happens to the audio once it is sent, and the cloud has no access to
+Nextcloud.
 
-## Установка
+## Install
 
-Нужны два значения. Всё остальное сервис спрашивает у приложения при старте —
-адрес сигнального сервера и его секрет, учётку бота, список бесед, имена папок.
+Two values are needed. Everything else the service asks the app for at startup —
+the signalling server and its secret, the bot account, which conversations to
+capture, the folder names.
 
 ```bash
 docker run -d --name nextcloud-talk-capture \
   -e NEXTCLOUD_URL=https://cloud.example.com \
-  -e APP_SERVICE_TOKEN=<ключ из настроек приложения> \
-  -e GATEWAY_TARGET=<адрес шлюза> \
-  -e GATEWAY_TOKEN=<ключ шлюза> \
+  -e APP_SERVICE_TOKEN=<key from the app's admin settings> \
+  -e GATEWAY_TARGET=<gateway address> \
+  -e GATEWAY_TOKEN=<gateway key> \
   nextcloud-talk-capture
 ```
 
-Сервис работает **только на исходящих** соединениях: за NAT он живёт без
-проброса портов и без входящих вебхуков.
+The service makes **outbound connections only**: behind NAT it needs no port
+forwarding and no inbound webhooks.
 
-### Где его размещать
+### Where to put it
 
-Захват — это WebRTC-клиент, он подключается к сигнальному серверу так же, как
-обычный участник звонка. Ставить его рядом с сигнальным сервером не обязательно,
-но чем ближе по сети, тем меньше поводов у ICE не сойтись.
+Capture is a WebRTC client — it connects to the signalling server the way an
+ordinary participant does. Running it next to the signalling server is not
+required, but the closer the two are on the network, the fewer reasons ICE has to
+fail to agree.
 
-## Переменные окружения
+## Environment
 
-| Переменная | Обязательна | Что это |
+| Variable | Required | What it is |
 |---|---|---|
-| `NEXTCLOUD_URL` | да | адрес Nextcloud |
-| `APP_SERVICE_TOKEN` | да | общий секрет с приложением |
-| `GATEWAY_TARGET` | да | `host:port` шлюза обработки |
-| `GATEWAY_TOKEN` | да | ключ доступа к шлюзу |
-| `GATEWAY_TLS` | нет | `false` только для локальной отладки |
-| `POLL_INTERVAL` | нет | как часто спрашивать приложение о звонках, сек (5) |
-| `INCLUDED_ROOMS` / `EXCLUDED_ROOMS` | нет | сузить область локально, не трогая настройки для всех |
-| `DIAGNOSTIC_LOGGING` | нет | подробные логи захвата |
+| `NEXTCLOUD_URL` | yes | the Nextcloud address |
+| `APP_SERVICE_TOKEN` | yes | shared secret with the app |
+| `GATEWAY_TARGET` | yes | `host:port` of the processing gateway |
+| `GATEWAY_TOKEN` | yes | access key for the gateway |
+| `GATEWAY_TLS` | no | `false` for local debugging only |
+| `POLL_INTERVAL` | no | how often to ask the app about calls, seconds (5) |
+| `NC_APP_ID` | no | the app's id, `voxonta` by default — only if you renamed it |
+| `INCLUDED_ROOMS` / `EXCLUDED_ROOMS` | no | narrow the scope locally without changing it for everyone |
+| `DIAGNOSTIC_LOGGING` | no | verbose capture logs |
 
-## Как библиотека
+## As a library
 
 ```bash
 pip install nextcloud-talk-capture
@@ -68,17 +76,17 @@ pip install nextcloud-talk-capture
 from talk_capture import AppClient, AppCallMonitor, BrainSink, SpreedClient
 ```
 
-Сгенерированные стабы контракта лежат в пакете (`talk_capture/_pb`), поэтому
-установка не требует `protoc`. После правки `proto/meeting/v1/meeting.proto`
-их надо перегенерировать — `scripts/regen_stubs.sh`.
+The generated contract stubs ship inside the package (`talk_capture/_pb`), so
+installing needs no `protoc`. After editing `proto/meeting/v1/meeting.proto`
+regenerate them with `scripts/regen_stubs.sh`.
 
-## Разработка
+## Development
 
 ```bash
 pip install -e '.[dev]' pytest
 python -m pytest tests -v
 ```
 
-## Лицензия
+## Licence
 
 MIT.
