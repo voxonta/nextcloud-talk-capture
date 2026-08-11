@@ -127,7 +127,11 @@ class CallSession:
 class CaptureService:
     def __init__(self):
         self.config = CaptureConfig.from_env()
-        self._app = AppClient(self.config.app_base_url, self.config.app_service_token)
+        self._app = AppClient(
+            self.config.app_base_url,
+            self.config.app_service_token,
+            app_id=self.config.app_id,
+        )
         self._sessions: dict = {}
         self._monitor = None
         self._stop = asyncio.Event()

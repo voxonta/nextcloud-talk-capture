@@ -37,6 +37,8 @@ class CaptureConfig:
     # on both sides; app_base_url defaults to nc_url, the app living there.
     app_service_token: str = ""
     app_base_url: str = ""
+    # The app's id, which is also its URL prefix. Renaming the app changes it.
+    app_id: str = "voxonta"
     poll_interval: float = 5.0
 
     # ── The meeting gateway ──
@@ -71,6 +73,7 @@ class CaptureConfig:
             nc_url=nc_url,
             app_service_token=os.environ.get("APP_SERVICE_TOKEN", ""),
             app_base_url=os.environ.get("APP_BASE_URL", "").rstrip("/") or nc_url,
+            app_id=os.environ.get("NC_APP_ID", "voxonta"),
             poll_interval=float(os.environ.get("POLL_INTERVAL", "5")),
             brain_grpc_target=os.environ.get("GATEWAY_TARGET", ""),
             brain_grpc_tls=os.environ.get("GATEWAY_TLS", "true").lower() != "false",

@@ -62,10 +62,15 @@ class AppClientError(Exception):
 class AppClient:
     """Talks to the archive app's /service endpoints over HTTP."""
 
-    def __init__(self, base_url: str, token: str, *, timeout: float = 15.0):
+    def __init__(self, base_url: str, token: str, *, app_id: str = "voxonta", timeout: float = 15.0):
         # base_url is the Nextcloud root; the app lives under a fixed path below
-        # it, so the caller configures one URL, not three.
-        self._base = base_url.rstrip("/") + "/apps/done_transcription/api/v1/service"
+        # it, so the caller configures one URL, not three. The app id is a
+        # parameter rather than a constant because it has already changed once:
+        # the app was renamed to `voxonta` while this still asked for
+        # `done_transcription`, every poll answered 404, and the interceptor
+        # went blind to calls for a week without saying anything louder than a
+        # warning. Configurable, it can follow a rename without a rebuild.
+        self._base = f"{base_url.rstrip('/')}/apps/{app_id}/api/v1/service"
         self._token = token
         self._timeout = aiohttp.ClientTimeout(total=timeout)
 
