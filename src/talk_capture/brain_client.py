@@ -203,6 +203,28 @@ class BrainSink:
         if dead is not None:
             await self._reconnect(dead)
 
+    async def reopen(self) -> None:
+        """Drop whatever stream this sink holds and open a fresh one.
+
+        For handing a call over again after a close that failed or hung. The
+        gateway kept the engine session RUNNING when the old stream died, and
+        a new ProcessCall with the same context resumes it — so the end frame
+        sent next finalizes the call with everything already recognised.
+        2026-09-11 and 2026-09-18 each lost a morning meeting for want of this:
+        one close failed on a DNS error that was gone minutes later, the other
+        hung, and neither was ever tried again.
+        """
+        async with self._init_lock:
+            old = self._channel_obj
+            self._channel_obj = None
+            self._call = None
+            if old is not None:
+                try:
+                    await old.close()
+                except Exception:
+                    pass
+            await self._open_call()
+
     async def finalize(self, *, call_end_ms: int, uncaptured=None,
                        present_count: int | None = None, participants=None,
                        speakers=None, spans=None):

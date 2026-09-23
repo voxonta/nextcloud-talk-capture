@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 # Distribution name is explicit about the domain (PyPI is a global namespace);
 # the import name stays `talk_capture`.
 name = "nextcloud-talk-capture"
-version = "0.3.0"
+version = "0.3.1"
 description = "Capture Nextcloud Talk calls: signalling client, per-speaker audio, call monitoring"
 readme = "README.md"
 requires-python = ">=3.11"
