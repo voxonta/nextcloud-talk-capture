@@ -26,7 +26,7 @@ import uuid
 
 from talk_capture.app_client import AppClient, overlay_app_settings
 from talk_capture.app_monitor import AppCallMonitor
-from talk_capture.brain_client import BrainSink
+from talk_capture.brain_client import BrainArtifacts, BrainSink
 from talk_capture.config import CaptureConfig
 from talk_capture.spreed_client import SpreedClient
 
@@ -40,7 +40,20 @@ for _noisy in ("aiortc.rtcrtpreceiver", "aioice", "websockets"):
 
 logger = logging.getLogger("capture")
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
+
+# Leaving a call is closing peer connections and a websocket: seconds.
+DISCONNECT_TIMEOUT_S = 30
+# One hand-over: flush, end frame, and the gateway finalising the engine
+# session — the last recognition chunk, a minute or two when the engine is
+# busy. Past this the attempt is treated as failed, not waited out.
+HANDOVER_TIMEOUT_S = 300
+# Pauses before each retry. Spans the outages actually seen: a DNS failure
+# during the Nextcloud move lasted minutes; a gateway deploy, a couple.
+HANDOVER_RETRY_DELAYS_S = (30, 120, 300, 900)
+# meeting.v1 CallStatus values that mean "not taken yet".
+CALL_STATUS_UNSPECIFIED = 0
+CALL_STATUS_TRANSCRIBING = 1
 
 
 class CallSession:
@@ -83,11 +96,17 @@ class CallSession:
             logger.exception("capture failed for %s", self.call_info.room_token)
 
     async def stop(self):
-        """Close the call: tell the gateway who was there, then let go.
+        """Close the call: let go of it, then hand it over to the gateway.
 
         The roster and the track-to-person map are known only now — names settle
         as people join — so they ride out on the end frame rather than the
-        opening context.
+        opening context. They are read first, while the client still holds them.
+
+        Letting go comes before handing over, not after. On 2026-09-18 the
+        hand-over hung, the disconnect behind it never ran, and the client sat
+        in a finished call for six hours re-requesting offers from people who
+        had long left — while the gateway held the meeting open and counted it
+        as a live call, which also blocks every deploy.
         """
         if self._task and not self._task.done():
             self._task.cancel()
@@ -104,24 +123,70 @@ class CallSession:
                              self.call_info.room_token)
 
         try:
-            accepted = await self._sink.finalize(
-                call_end_ms=int(time.time() * 1000),
-                uncaptured=uncaptured,
-                present_count=present,
-                participants=participants,
-                speakers=speakers,
-            )
+            await asyncio.wait_for(self._spreed.disconnect(), timeout=DISCONNECT_TIMEOUT_S)
+        except Exception:
+            logger.warning("leaving the call did not finish cleanly for %s",
+                           self.call_info.room_token)
+
+        await self._hand_over({
+            "call_end_ms": int(time.time() * 1000),
+            "uncaptured": uncaptured,
+            "present_count": present,
+            "participants": participants,
+            "speakers": speakers,
+        })
+
+    async def _hand_over(self, end: dict) -> None:
+        """Send the end frame until the gateway has the call, within reason.
+
+        Every attempt is bounded: an unbounded wait is what kept a finished
+        meeting open for good. A failed attempt is retried on a fresh stream —
+        the gateway resumes the engine session, so nothing recognised is lost —
+        but only after asking whether the last one got through after all: a
+        call the gateway already took must not be ended twice.
+        """
+        for attempt, delay in enumerate((0, *HANDOVER_RETRY_DELAYS_S), 1):
+            if delay:
+                await asyncio.sleep(delay)
+                if await self._already_taken():
+                    logger.info("gateway already has %s [%s]",
+                                self.call_info.room_token, self.session_id[:12])
+                    return
+                try:
+                    await self._sink.reopen()
+                except Exception as e:
+                    logger.warning("hand-over %d/%d: gateway unreachable for %s: %s",
+                                   attempt, 1 + len(HANDOVER_RETRY_DELAYS_S),
+                                   self.call_info.room_token, e)
+                    continue
+            try:
+                accepted = await asyncio.wait_for(self._sink.finalize(**end),
+                                                  timeout=HANDOVER_TIMEOUT_S)
+            except Exception as e:
+                logger.warning("hand-over %d/%d failed for %s: %s",
+                               attempt, 1 + len(HANDOVER_RETRY_DELAYS_S),
+                               self.call_info.room_token, e or type(e).__name__)
+                continue
             if accepted:
                 logger.info("gateway accepted %s [%s]",
                             self.call_info.room_token, accepted[0][:12])
-        except Exception:
-            logger.exception("closing the stream failed for %s",
-                             self.call_info.room_token)
+            return
+        logger.error("gave up handing over %s [%s] — the gateway's own backstop "
+                     "has to close it", self.call_info.room_token, self.session_id[:12])
 
+    async def _already_taken(self) -> bool:
+        """Whether the gateway has moved the call past "transcribing".
+
+        Unknown (the gateway cannot be asked) counts as not taken: a second
+        end frame for a finished call is refused and logged, a call never
+        handed over is a meeting lost.
+        """
         try:
-            await self._spreed.disconnect()
+            status, _files, _detail = await asyncio.wait_for(
+                BrainArtifacts(self.config).fetch(self.session_id), timeout=30)
         except Exception:
-            pass
+            return False
+        return status not in (CALL_STATUS_UNSPECIFIED, CALL_STATUS_TRANSCRIBING)
 
 
 class CaptureService:
