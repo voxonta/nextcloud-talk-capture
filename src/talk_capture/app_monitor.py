@@ -124,11 +124,13 @@ class AppCallMonitor:
                     # The session holds this same object and reads the flag on
                     # every frame, so setting it here is the whole hand-off.
                     known.recording = recording
+                    # Why is the app's to say, and its own log does: an opt-out
+                    # in Talk, but in Matrix also a call the room has not been
+                    # told about yet. Naming one reason here misled a reader of
+                    # the 28.10 logs into looking for an opt-out nobody made.
                     logger.info(
-                        "Recording %s in %s (%s): the room %s",
-                        "resumed" if recording else "paused",
-                        known.room_name, token,
-                        "asked to record again" if recording else "opted out",
+                        "Recording %s in %s (%s): the app says so",
+                        "on" if recording else "off", known.room_name, token,
                     )
                 continue
 
@@ -155,7 +157,7 @@ class AppCallMonitor:
                 "Call started: %s (%s), type=%d%s%s",
                 info.room_name, token, info.room_type,
                 "" if platform == "talk" else f", platform={platform}",
-                "" if recording else ", recording off (room opted out)",
+                "" if recording else ", not recording until the app allows it",
             )
             asyncio.create_task(self._on_call_started(info))
 
