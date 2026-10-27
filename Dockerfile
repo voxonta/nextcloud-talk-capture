@@ -1,5 +1,6 @@
-# The capture service: joins Nextcloud Talk calls and streams their audio to a
-# meeting gateway. It carries no recognition stack — none of that happens here.
+# The capture service: joins Nextcloud Talk and LiveKit (Element Call) calls and
+# streams their audio to a meeting gateway. It carries no recognition stack —
+# none of that happens here.
 #
 #   docker build -t nextcloud-talk-capture .
 FROM python:3.12-slim
@@ -22,7 +23,9 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
-RUN pip install --no-cache-dir .
+# With the LiveKit extra: one image serves Talk and Element Call, the
+# platform being decided per call by the app it polls.
+RUN pip install --no-cache-dir '.[livekit]'
 
 # The service entry point is not part of the installed package: the package is
 # the library, this is one way to run it.
