@@ -20,7 +20,7 @@ import logging
 from collections.abc import Callable, Coroutine
 
 from talk_capture.app_client import AppClient, AppClientError
-from talk_capture.call_info import CallInfo
+from talk_capture.call_info import SOURCE_BY_PLATFORM, CallInfo
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,9 @@ class AppCallMonitor:
 
             known = self._active_calls.get(token)
             if known is not None:
+                # Whatever the driver reads from the entry — a refreshed token,
+                # someone new in the room — reaches it the same way.
+                known.details = call
                 if known.recording != recording:
                     # The session holds this same object and reads the flag on
                     # every frame, so setting it here is the whole hand-off.
@@ -129,6 +132,9 @@ class AppCallMonitor:
                     )
                 continue
 
+            # An app that predates the field serves Talk, the only platform
+            # there was.
+            platform = str(call.get("platform") or "talk")
             info = CallInfo(
                 room_token=token,
                 room_name=call.get("name") or token,
@@ -140,11 +146,15 @@ class AppCallMonitor:
                 # otherwise, and the caller falls back to generating one.
                 session_id=str(call.get("session_id") or ""),
                 recording=recording,
+                platform=platform,
+                source=str(call.get("source") or SOURCE_BY_PLATFORM.get(platform, "")),
+                details=call,
             )
             self._active_calls[token] = info
             logger.info(
-                "Call started: %s (%s), type=%d%s",
+                "Call started: %s (%s), type=%d%s%s",
                 info.room_name, token, info.room_type,
+                "" if platform == "talk" else f", platform={platform}",
                 "" if recording else ", recording off (room opted out)",
             )
             asyncio.create_task(self._on_call_started(info))

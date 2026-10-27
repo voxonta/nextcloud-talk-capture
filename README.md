@@ -33,6 +33,11 @@ one poll — five seconds by default — while staying in the call, so `/record`
 continues the same meeting. Needs the app 3.0.9 or later; with an older app
 every call is recorded, as before.
 
+Joining a call is the one part that depends on the platform. The app lists each
+call with a `platform` — `talk` when it says nothing — and the service picks a
+driver for it (`talk_capture.driver`). Talk is the only driver in this version;
+a call on a platform it does not know is logged and left alone.
+
 ## Install
 
 Two values are needed. Everything else the service asks the app for at startup —
@@ -62,7 +67,8 @@ fail to agree.
 
 | Variable | Required | What it is |
 |---|---|---|
-| `NEXTCLOUD_URL` | yes | the Nextcloud address |
+| `NEXTCLOUD_URL` | for Talk | the Nextcloud address; also where the app is, unless `APP_BASE_URL` says otherwise |
+| `APP_BASE_URL` | no | where the app's service API is, if not on `NEXTCLOUD_URL` |
 | `APP_SERVICE_TOKEN` | yes | shared secret with the app |
 | `GATEWAY_TARGET` | yes | `host:port` of the processing gateway |
 | `GATEWAY_TOKEN` | yes | access key for the gateway |

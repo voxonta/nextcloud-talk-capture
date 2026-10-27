@@ -73,7 +73,7 @@ def session(order, script, *, hang_disconnect=False, taken=()):
     s.session_id = "sess-1"
     s._task = None
     s._dropped_frames = 0
-    s._spreed = FakeSpreed(order, hang=hang_disconnect)
+    s._driver = FakeSpreed(order, hang=hang_disconnect)
     s._sink = FakeSink(order, script)
     answers = list(taken)
 

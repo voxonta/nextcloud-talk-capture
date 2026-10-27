@@ -3,7 +3,8 @@
 Three moving parts and a short life:
 
   * the Nextcloud app says a call is live and hands over the settings,
-  * `SpreedClient` joins it and yields one audio stream per speaker,
+  * a driver joins it and yields one audio stream per speaker — `SpreedClient`
+    for Talk, chosen by the platform the app reports (talk_capture.driver),
   * `BrainSink` streams those to the meeting gateway and closes with who was
     present and who each track belonged to.
 
@@ -28,7 +29,7 @@ from talk_capture.app_client import AppClient, overlay_app_settings
 from talk_capture.app_monitor import AppCallMonitor
 from talk_capture.brain_client import BrainArtifacts, BrainSink
 from talk_capture.config import CaptureConfig
-from talk_capture.spreed_client import SpreedClient
+from talk_capture.driver import CannotJoin, make_driver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +64,9 @@ class CallSession:
         self.config = config
         self.call_info = call_info
         self.call_start = time.time()
+        # First, so a call nobody can join raises CannotJoin before a gateway
+        # stream exists for it.
+        self._driver = make_driver(config, call_info, self._on_audio_frame)
         # The meeting id. The app issues it when it can, so the same call keeps
         # its id across a restart of this service and the gateway resumes rather
         # than recording a second meeting.
@@ -72,7 +76,7 @@ class CallSession:
         self._dropped_frames = 0
         self._sink = BrainSink(config, {
             "session_id": self.session_id,
-            "source": "nc-talk",
+            "source": call_info.source,
             "room_token": call_info.room_token,
             "room_name": call_info.room_name,
             "room_kind": call_info.room_type,
@@ -80,11 +84,6 @@ class CallSession:
             "timezone": config.timezone,
             "call_start_ms": int(self.call_start * 1000),
         })
-        self._spreed = SpreedClient(
-            config=config,
-            room_token=call_info.room_token,
-            on_audio_frame=self._on_audio_frame,
-        )
         self._task = asyncio.create_task(self._run())
 
     async def _on_audio_frame(self, speaker_sid, frame):
@@ -100,7 +99,7 @@ class CallSession:
 
     async def _run(self):
         try:
-            await self._spreed.connect_and_join()
+            await self._driver.connect_and_join()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -127,17 +126,17 @@ class CallSession:
 
         participants, uncaptured, present, speakers = [], [], None, {}
         try:
-            participants = self._spreed.get_call_participants()
-            uncaptured = self._spreed.get_uncaptured_participants()
-            present = self._spreed.get_call_participant_count()
-            speakers = {sid: self._spreed.get_speaker_name(sid)
-                        for sid in self._spreed.speakers}
+            participants = self._driver.get_call_participants()
+            uncaptured = self._driver.get_uncaptured_participants()
+            present = self._driver.get_call_participant_count()
+            speakers = {sid: self._driver.get_speaker_name(sid)
+                        for sid in self._driver.speakers}
         except Exception:
             logger.exception("reading the roster failed for %s",
                              self.call_info.room_token)
 
         try:
-            await asyncio.wait_for(self._spreed.disconnect(), timeout=DISCONNECT_TIMEOUT_S)
+            await asyncio.wait_for(self._driver.disconnect(), timeout=DISCONNECT_TIMEOUT_S)
         except Exception:
             logger.warning("leaving the call did not finish cleanly for %s",
                            self.call_info.room_token)
@@ -218,8 +217,17 @@ class CaptureService:
     async def _on_call_started(self, call_info):
         if call_info.room_token in self._sessions:
             return
+        try:
+            session = CallSession(self.config, call_info)
+        except CannotJoin as e:
+            # Once per call: the monitor reports a start only once. Not joining
+            # is the safe side — an integration newer than this service lists
+            # calls it cannot handle, and guessing would capture them wrongly.
+            logger.warning("not joining %s (%s): %s",
+                           call_info.room_name, call_info.room_token, e)
+            return
         logger.info("call started: %s (%s)", call_info.room_name, call_info.room_token)
-        self._sessions[call_info.room_token] = CallSession(self.config, call_info)
+        self._sessions[call_info.room_token] = session
 
     async def _on_call_ended(self, room_token):
         session = self._sessions.pop(room_token, None)
@@ -245,8 +253,12 @@ class CaptureService:
                 pass
 
     async def run(self):
-        if not self.config.nc_url or not self.config.app_service_token:
-            raise SystemExit("NEXTCLOUD_URL and APP_SERVICE_TOKEN are required")
+        # The app is what is required; Nextcloud itself only for Talk calls,
+        # which is checked when one starts. An integration other than the
+        # Nextcloud app is reached through APP_BASE_URL alone.
+        if not self.config.app_base_url or not self.config.app_service_token:
+            raise SystemExit("APP_SERVICE_TOKEN and the app's address "
+                             "(NEXTCLOUD_URL or APP_BASE_URL) are required")
         if not self.config.brain_grpc_target:
             raise SystemExit("GATEWAY_TARGET is required — there is nowhere to send audio")
 
