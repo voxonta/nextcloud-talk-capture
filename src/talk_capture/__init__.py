@@ -21,6 +21,9 @@ _WHERE = {
     "BrainArtifacts": "brain_client",
     "BrainSink": "brain_client",
     "CallInfo": "call_info",
+    "CallDriver": "driver",
+    "CannotJoin": "driver",
+    "make_driver": "driver",
     "CaptureConfig": "config",
     "SpreedClient": "spreed_client",
 }

@@ -98,9 +98,11 @@ class AppClient:
     async def fetch_calls(self) -> list[dict]:
         """The calls live right now.
 
-        Each is ``{token, name, type, started_at}``; call_flag is not among them
-        because the app learns of a call from an event, not the room's live
-        flags, and the capture side only needs to know a call is happening.
+        Each is ``{token, name, type, started_at}``, and from newer apps
+        ``session_id``, ``recording``, ``platform`` (absent = Talk) and whatever
+        that platform's driver needs. call_flag is not among them because the
+        app learns of a call from an event, not the room's live flags, and the
+        capture side only needs to know a call is happening.
 
         @return list, oldest first — the order to pick them up in.
         """
