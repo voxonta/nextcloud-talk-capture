@@ -23,7 +23,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install
-        run: pip install -e '.[dev]' pytest build twine
+        run: pip install -e '.[dev,livekit]' pytest build twine
 
       - name: Test
         run: python -m pytest tests -q

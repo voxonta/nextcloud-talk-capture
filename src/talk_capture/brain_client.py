@@ -24,6 +24,8 @@ import collections
 import logging
 import time
 
+import numpy as np
+
 from talk_capture.audio import TARGET_RATE, _frame_pts_ms, frame_to_pcm
 
 logger = logging.getLogger(__name__)
@@ -170,8 +172,16 @@ class BrainSink:
         try:
             pb = self._pbmod()
             recv_ts_ms = int(time.time() * 1000)
-            pts_ms = _frame_pts_ms(frame)
-            pcm = frame_to_pcm(frame, TARGET_RATE)
+            pcm16 = getattr(frame, "pcm16", None)
+            if pcm16 is not None:
+                # Decoded and resampled by the conference SDK already (LiveKit).
+                # No media timestamp comes with it: 0 tells the gateway to
+                # space frames by recv_ts_ms.
+                pts_ms = 0
+                pcm = np.frombuffer(pcm16, dtype="<i2").astype(np.float32) / 32768.0
+            else:
+                pts_ms = _frame_pts_ms(frame)
+                pcm = frame_to_pcm(frame, TARGET_RATE)
             f = pb.CallFrame(audio=pb.AudioChunk(
                 speaker_id=speaker_sid, speaker_name="",
                 pcm=pcm.astype("float32").tobytes(),

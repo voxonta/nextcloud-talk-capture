@@ -20,7 +20,6 @@ import talk_capture.aioice_patch  # noqa: F401  (import for side effect)
 
 import asyncio
 import logging
-import os
 import signal
 import time
 import uuid

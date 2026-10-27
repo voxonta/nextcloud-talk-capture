@@ -112,9 +112,31 @@ def test_talk_without_a_nextcloud_address_is_refused_not_attempted():
 
 
 def test_a_platform_this_version_does_not_know_is_refused():
-    info = CallInfo("r", "n", 2, 1, platform="livekit", source="element-call")
-    with pytest.raises(CannotJoin, match="livekit"):
+    info = CallInfo("r", "n", 2, 1, platform="jitsi", source="jitsi")
+    with pytest.raises(CannotJoin, match="jitsi"):
         make_driver(SimpleNamespace(nc_url="https://cloud.example"), info, _noop)
+
+
+def _livekit_call(**livekit):
+    return CallInfo("!r:example.org", "n", 2, 1, platform="livekit", source="element-call",
+                    details={"livekit": livekit})
+
+
+def test_livekit_gets_the_livekit_client_and_needs_no_nextcloud():
+    pytest.importorskip("livekit.rtc")
+    from talk_capture.livekit_client import LiveKitClient
+
+    info = _livekit_call(url="wss://lk.example.org", token="jwt")
+    driver = make_driver(SimpleNamespace(nc_url=""), info, _noop)
+    assert isinstance(driver, LiveKitClient)
+    assert driver.room_token == "!r:example.org"
+
+
+def test_livekit_without_a_token_is_refused_not_attempted():
+    # The integration had no LiveKit key, or the entry came from an app that
+    # says "livekit" and gives nothing to join with.
+    with pytest.raises(CannotJoin, match="token"):
+        make_driver(SimpleNamespace(nc_url=""), _livekit_call(url="wss://lk.example.org"), _noop)
 
 
 # ── the service around it ─────────────────────────────────────────────

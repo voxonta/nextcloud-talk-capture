@@ -60,4 +60,15 @@ def make_driver(config, call_info, on_audio_frame: AudioFrameHandler) -> CallDri
 
         return SpreedClient(config=config, room_token=call_info.room_token,
                             on_audio_frame=on_audio_frame)
+    if platform == "livekit":
+        lk = (getattr(call_info, "details", None) or {}).get("livekit") or {}
+        if not lk.get("url") or not lk.get("token"):
+            raise CannotJoin("a LiveKit call without an address or token in its entry")
+        try:
+            from talk_capture.livekit_client import LiveKitClient
+            from livekit import rtc  # noqa: F401  (fail here, not mid-call)
+        except ImportError:
+            raise CannotJoin("a LiveKit call, and the livekit package is not installed "
+                             "(pip install 'nextcloud-talk-capture[livekit]')") from None
+        return LiveKitClient(config, call_info, on_audio_frame)
     raise CannotJoin(f"platform {platform!r} is not supported by this version")

@@ -26,6 +26,8 @@ _WHERE = {
     "make_driver": "driver",
     "CaptureConfig": "config",
     "SpreedClient": "spreed_client",
+    "LiveKitClient": "livekit_client",
+    "Pcm16Frame": "audio",
 }
 
 __all__ = list(_WHERE)

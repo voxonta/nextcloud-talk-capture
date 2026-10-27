@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # the import name stays `talk_capture`.
 name = "nextcloud-talk-capture"
 version = "0.3.2"
-description = "Capture Nextcloud Talk calls: signalling client, per-speaker audio, call monitoring"
+description = "Capture Nextcloud Talk and LiveKit (Element Call) calls: per-speaker audio streamed to a meeting gateway"
 readme = "README.md"
 requires-python = ">=3.11"
 # MIT on purpose, not by default: this is consumed both by an AGPL Nextcloud app
@@ -15,7 +15,7 @@ requires-python = ">=3.11"
 # is compatible in both directions.
 license = { text = "MIT" }
 authors = [{ name = "Done" }]
-keywords = ["nextcloud", "nextcloud-talk", "webrtc", "transcription", "audio-capture"]
+keywords = ["nextcloud", "nextcloud-talk", "livekit", "element-call", "webrtc", "transcription", "audio-capture"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -48,6 +48,9 @@ dependencies = [
 # before, and the README told people to type it.
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Element Call and anything else on LiveKit. Optional because it brings a
+# native library of its own, which a Talk-only installation has no use for.
+livekit = ["livekit>=1.2.0,<2"]
 
 [project.urls]
 Homepage = "https://github.com/voxonta/nextcloud-talk-capture"

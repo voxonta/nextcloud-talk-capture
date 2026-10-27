@@ -24,7 +24,36 @@ jobs:
           python-version: '3.12'
 
       - name: Install
-        run: pip install -e '.[dev]' pytest
+        run: pip install -e '.[dev,livekit]' pytest
 
       - name: Test
         run: python -m pytest tests -q
+
+  livekit:
+    name: LiveKit, real server
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Start LiveKit (dev mode)
+        run: >-
+          docker run -d --rm --name livekit
+          -p 7880:7880 -p 7881:7881 -p 7882:7882/udp
+          livekit/livekit-server:v1.8.4 --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+
+      - name: Install
+        run: pip install -e '.[livekit]' pytest
+
+      - name: Test
+        env:
+          LIVEKIT_E2E_URL: ws://127.0.0.1:7880
+        run: python -m pytest tests/test_livekit_e2e.py -v
+
+      - name: Server log
+        if: failure()
+        run: docker logs livekit 2>&1 | tail -100

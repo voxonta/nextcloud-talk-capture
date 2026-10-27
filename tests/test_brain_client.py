@@ -147,3 +147,36 @@ def test_artifacts_fetch_and_ack():
     assert files[0].name == "2025-05-19 - Планёрка.md"
     assert files[0].sha256 == "deadbeef"
     assert acked == [("sess-xyz", ["deadbeef"])]
+
+
+def test_decoded_pcm_goes_out_as_is_without_frame_to_pcm(monkeypatch):
+    # LiveKit's SDK hands over 16 kHz mono int16. Running it through aiortc's
+    # transform would break on it, and resampling it again would be wrong.
+    from talk_capture.audio import Pcm16Frame
+
+    def must_not_run(frame, rate):
+        raise AssertionError("frame_to_pcm is for aiortc frames")
+
+    monkeypatch.setattr(brain_client, "frame_to_pcm", must_not_run)
+    samples = np.array([0, 16384, -32768, 32767], dtype="<i2")
+
+    async def go():
+        gw = _FakeGateway()
+        server, addr = await _serve(gw)
+        try:
+            ctx = {**_context(), "source": "element-call"}
+            sink = BrainSink(_cfg(addr), ctx)
+            await sink.process_audio_frame("@a:example.org:LAPTOP",
+                                           Pcm16Frame(samples.tobytes()), 0.0)
+            await sink.finalize(call_end_ms=1, speakers={"@a:example.org:LAPTOP": "Алиса"})
+            return gw
+        finally:
+            await server.stop(grace=0)
+
+    gw = asyncio.run(go())
+    [chunk] = gw.audio
+    sent = np.frombuffer(chunk.pcm, dtype=np.float32)
+    assert sent.tolist() == [0.0, 0.5, -1.0, 32767 / 32768]
+    assert chunk.pts_ms == 0  # no media clock: the gateway spaces by recv_ts_ms
+    assert gw.context.source == "element-call"
+    assert dict(gw.end.speakers) == {"@a:example.org:LAPTOP": "Алиса"}

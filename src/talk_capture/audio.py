@@ -1,4 +1,4 @@
-"""Turning an aiortc audio frame into the PCM the contract specifies.
+"""Turning captured audio into the PCM the contract specifies.
 
 The one transform every captured frame goes through, kept pure and in one place:
 mono extraction, dtype normalisation, resampling. The gateway is fed
@@ -8,10 +8,26 @@ happened to send.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 # Canonical contract rate. Not a tuning knob — the far side assumes it.
 TARGET_RATE = 16000
+
+
+@dataclass(frozen=True)
+class Pcm16Frame:
+    """Audio that is already in the contract's shape, short of the sample type.
+
+    Mono, TARGET_RATE, signed 16-bit little-endian — what a LiveKit AudioStream
+    yields when asked for 16 kHz mono, decoded and resampled by the SDK.
+    frame_to_pcm is for aiortc frames and must not touch these: resampling
+    them again would be a no-op at best. The sink recognises them by the
+    `pcm16` attribute, not by type, so it needs no import of this module.
+    """
+
+    pcm16: bytes
 
 
 def _frame_pts_ms(frame) -> int:
