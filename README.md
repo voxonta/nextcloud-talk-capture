@@ -27,6 +27,12 @@ Nextcloud is a black box to the cloud and the other way round: the connector doe
 not know what happens to the audio once it is sent, and the cloud has no access to
 Nextcloud.
 
+When a room opts out of recording (`/no-record` in its chat), the app lists the
+call with `recording: false` and the connector stops sending its audio within
+one poll — five seconds by default — while staying in the call, so `/record`
+continues the same meeting. Needs the app 3.0.9 or later; with an older app
+every call is recorded, as before.
+
 ## Install
 
 Two values are needed. Everything else the service asks the app for at startup —
