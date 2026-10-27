@@ -40,7 +40,7 @@ for _noisy in ("aiortc.rtcrtpreceiver", "aioice", "websockets"):
 
 logger = logging.getLogger("capture")
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 # Leaving a call is closing peer connections and a websocket: seconds.
 DISCONNECT_TIMEOUT_S = 30
@@ -67,6 +67,9 @@ class CallSession:
         # its id across a restart of this service and the gateway resumes rather
         # than recording a second meeting.
         self.session_id = getattr(call_info, "session_id", "") or str(uuid.uuid4())
+        # Frames not sent because the room opted out — logged at the end, so
+        # "it said stopped" can be checked against what actually went out.
+        self._dropped_frames = 0
         self._sink = BrainSink(config, {
             "session_id": self.session_id,
             "source": "nc-talk",
@@ -85,6 +88,14 @@ class CallSession:
         self._task = asyncio.create_task(self._run())
 
     async def _on_audio_frame(self, speaker_sid, frame):
+        # "/no-record": the frame is dropped here, before the sink, so it is
+        # neither sent nor queued for a later reconnect. The flag lives on the
+        # monitor's CallInfo and flips within one poll of the room's command.
+        # Until 2026-10-27 nothing checked it — the room was told recording had
+        # stopped while every frame still went out.
+        if not getattr(self.call_info, "recording", True):
+            self._dropped_frames += 1
+            return
         await self._sink.process_audio_frame(speaker_sid, frame, self.call_start)
 
     async def _run(self):
@@ -110,6 +121,9 @@ class CallSession:
         """
         if self._task and not self._task.done():
             self._task.cancel()
+        if self._dropped_frames:
+            logger.info("%s: %d frames not sent while the room had opted out",
+                        self.call_info.room_token, self._dropped_frames)
 
         participants, uncaptured, present, speakers = [], [], None, {}
         try:

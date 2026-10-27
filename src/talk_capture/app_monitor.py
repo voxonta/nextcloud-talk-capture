@@ -111,25 +111,43 @@ class AppCallMonitor:
                 continue
 
             current.add(token)
+            # Only an explicit false stops it: an app that predates the flag
+            # does not send it, and those calls were always recorded.
+            recording = call.get("recording", True) is not False
 
-            if token not in self._active_calls:
-                info = CallInfo(
-                    room_token=token,
-                    room_name=call.get("name") or token,
-                    room_type=int(call.get("type", 0)),
-                    # The app does not report the call flag; assume audio, which
-                    # is what capture needs and what every call has.
-                    call_flag=1,
-                    # Issued by the app when it is new enough to do so; empty
-                    # otherwise, and the caller falls back to generating one.
-                    session_id=str(call.get("session_id") or ""),
-                )
-                self._active_calls[token] = info
-                logger.info(
-                    "Call started: %s (%s), type=%d",
-                    info.room_name, token, info.room_type,
-                )
-                asyncio.create_task(self._on_call_started(info))
+            known = self._active_calls.get(token)
+            if known is not None:
+                if known.recording != recording:
+                    # The session holds this same object and reads the flag on
+                    # every frame, so setting it here is the whole hand-off.
+                    known.recording = recording
+                    logger.info(
+                        "Recording %s in %s (%s): the room %s",
+                        "resumed" if recording else "paused",
+                        known.room_name, token,
+                        "asked to record again" if recording else "opted out",
+                    )
+                continue
+
+            info = CallInfo(
+                room_token=token,
+                room_name=call.get("name") or token,
+                room_type=int(call.get("type", 0)),
+                # The app does not report the call flag; assume audio, which
+                # is what capture needs and what every call has.
+                call_flag=1,
+                # Issued by the app when it is new enough to do so; empty
+                # otherwise, and the caller falls back to generating one.
+                session_id=str(call.get("session_id") or ""),
+                recording=recording,
+            )
+            self._active_calls[token] = info
+            logger.info(
+                "Call started: %s (%s), type=%d%s",
+                info.room_name, token, info.room_type,
+                "" if recording else ", recording off (room opted out)",
+            )
+            asyncio.create_task(self._on_call_started(info))
 
         ended = set(self._active_calls) - current
         for token in ended:

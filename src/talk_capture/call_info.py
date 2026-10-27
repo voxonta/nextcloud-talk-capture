@@ -25,3 +25,9 @@ class CallInfo:
     # Empty when the source cannot issue one (MySQL monitor, older app) — the
     # caller generates one instead.
     session_id: str = ""
+    # False while the room has opted out of recording ("/no-record"). Owned by
+    # the app and refreshed on every poll, on this same object, so the session
+    # that holds it sees the change within one poll interval. The call stays
+    # joined while it is off: resuming continues the same meeting. True when the
+    # source does not say (MySQL monitor, older app) — what those always did.
+    recording: bool = True
