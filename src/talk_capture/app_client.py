@@ -110,6 +110,9 @@ class AppClient:
         calls = data.get("calls")
         return calls if isinstance(calls, list) else []
 
+    async def report_capture(self, reports: list[dict]) -> None:
+        await self._post("/capture", {"reports": reports})
+
     async def heartbeat(self, version: str, note: str = "") -> None:
         """Report that this service is alive, so the administrator can see it.
 
@@ -159,6 +162,7 @@ class AppClient:
         # Both header forms, matching the app: a bearer token is the
         # convention, while some proxies strip Authorization headers.
         return {
+            "X-Voxonta-Capture-Protocol": "widget-v1",
             "Authorization": f"Bearer {self._token}",
             "X-Transcription-Token": self._token,
         }

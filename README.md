@@ -123,3 +123,13 @@ python -m pytest tests -v
 ## Licence
 
 MIT.
+
+### Standalone Matrix widget control
+
+The `widget-v1` service protocol adds `revision` and `lease_until` to call entries.
+Audio is discarded when its lease expires, including while polling is unavailable.
+Capture reports applied states at `/service/capture`; a pause report waits for
+an in-flight sink call to finish. Reports refer to the exact session and revision.
+A changed session id in the same room starts a separate capture. Existing Talk
+calls without a lease retain their prior behavior. This is unreleased code; use
+`POLL_INTERVAL=1` with the corresponding Matrix widget integration.

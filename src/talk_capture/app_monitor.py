@@ -116,6 +116,14 @@ class AppCallMonitor:
             recording = call.get("recording", True) is not False
 
             known = self._active_calls.get(token)
+            if known is not None and call.get("session_id") and known.session_id != call["session_id"]:
+                # End callback pops the old session before yielding; handover may
+                # finish in the background while the new capture starts.
+                known.recording = False
+                self._active_calls.pop(token)
+                asyncio.create_task(self._on_call_ended(token))
+                await asyncio.sleep(0)
+                known = None
             if known is not None:
                 # Whatever the driver reads from the entry — a refreshed token,
                 # someone new in the room — reaches it the same way.

@@ -85,16 +85,45 @@ class CallSession:
         })
         self._task = asyncio.create_task(self._run())
 
+    def _frame_lock(self):
+        # Some integrations construct sessions before a driver connects.
+        if not hasattr(self, "_audio_lock"):
+            self._audio_lock = asyncio.Lock()
+        return self._audio_lock
+
+    def _allowed(self):
+        details = getattr(self.call_info, "details", {}) or {}
+        lease = details.get("lease_until")
+        return (getattr(self.call_info, "recording", True)
+                and (lease is None or time.time() < float(lease)))
+
     async def _on_audio_frame(self, speaker_sid, frame):
-        # "/no-record": the frame is dropped here, before the sink, so it is
-        # neither sent nor queued for a later reconnect. The flag lives on the
-        # monitor's CallInfo and flips within one poll of the room's command.
-        # Until 2026-10-27 nothing checked it — the room was told recording had
-        # stopped while every frame still went out.
-        if not getattr(self.call_info, "recording", True):
-            self._dropped_frames += 1
-            return
-        await self._sink.process_audio_frame(speaker_sid, frame, self.call_start)
+        async with self._frame_lock():
+            if not self._allowed():
+                self._dropped_frames += 1
+                return
+            revision = (getattr(self.call_info, "details", {}) or {}).get("revision")
+            await self._sink.process_audio_frame(speaker_sid, frame, self.call_start)
+            self._sent_revision = revision
+
+    async def capture_status(self):
+        # Acquiring the same lock waits for a preceding in-flight sink call.
+        async with self._frame_lock():
+            details = getattr(self.call_info, "details", {}) or {}
+            revision = details.get("revision")
+            lease = details.get("lease_until", 0)
+            if time.time() >= float(lease):
+                phase = "unknown"
+            elif not getattr(self.call_info, "recording", True):
+                phase = "paused"
+            elif (getattr(getattr(self, "_driver", None), "_gone", None) is not None
+                  and (self._driver._gone.is_set() or self._driver._room is None)):
+                phase = "unknown"
+            elif getattr(self, "_sent_revision", None) == revision and revision is not None:
+                phase = "transcribing"
+            else:
+                phase = "starting"
+            return {"session_id": self.session_id, "revision": revision, "phase": phase}
 
     async def _run(self):
         try:
@@ -235,6 +264,20 @@ class CaptureService:
         logger.info("call ended: %s", room_token)
         await session.stop()
 
+    async def _report_capture(self):
+        while not self._stop.is_set():
+            try:
+                reports = [await s.capture_status() for s in list(self._sessions.values())
+                           if "lease_until" in (getattr(s.call_info, "details", {}) or {})]
+                if reports:
+                    await self._app.report_capture(reports)
+            except Exception as e:
+                logger.warning("capture state report failed: %s", e)
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=0.5)
+            except asyncio.TimeoutError:
+                pass
+
     async def _heartbeat(self):
         """Tell the app this service is alive, and re-read its settings.
 
@@ -275,6 +318,7 @@ class CaptureService:
             on_call_ended=self._on_call_ended,
         )
         asyncio.create_task(self._heartbeat())
+        asyncio.create_task(self._report_capture())
         logger.info("watching for calls")
         await self._monitor.start()
 

@@ -122,3 +122,49 @@ def test_a_session_without_the_flag_records():
         assert len(s._sink.frames) == 1
 
     asyncio.run(run())
+
+
+def test_expired_widget_lease_drops_audio_even_without_another_poll():
+    async def run():
+        s = session(True)
+        s.call_info.details = {"lease_until": 1, "revision": 1}
+        s.session_id = "widget-meeting"
+        await s._on_audio_frame("sid", "must-not-send")
+        assert not s._sink.frames
+        assert (await s.capture_status())["phase"] == "unknown"
+    asyncio.run(run())
+
+
+def test_pause_report_waits_for_inflight_frame():
+    async def run():
+        import time
+        s = session(True)
+        s.session_id = "widget-meeting"
+        s.call_info.details = {"lease_until": time.time() + 30, "revision": 1}
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def blocking(*args):
+            entered.set()
+            await release.wait()
+        s._sink.process_audio_frame = blocking
+        frame = asyncio.create_task(s._on_audio_frame("sid", "audio"))
+        await entered.wait()
+        s.call_info.recording = False
+        s.call_info.details["revision"] = 2
+        report = asyncio.create_task(s.capture_status())
+        await asyncio.sleep(0)
+        assert not report.done()
+        release.set()
+        await frame
+        assert (await report)["phase"] == "paused"
+    asyncio.run(run())
+
+
+def test_new_session_in_same_room_replaces_old_call():
+    async def run():
+        mon, started, ended = monitor()
+        await poll(mon, call(session_id="old"))
+        await poll(mon, call(session_id="new"))
+        assert ended == ["room1"]
+        assert [c.session_id for c in started] == ["old", "new"]
+        assert started[0].recording is False
+    asyncio.run(run())
